@@ -626,7 +626,7 @@ export async function markJobFailed(client: SupabaseClient, input: MarkJobFailed
     .from("jobs")
     .update({
       status: transition.nextStatus,
-      run_after: transition.nextRunAfterIso,
+      run_after: transition.nextRunAfterIso ?? now.toISOString(),
       locked_at: null,
       locked_by: null,
       error_code: input.errorCode ?? null,

@@ -369,7 +369,10 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
     dependencies.sendDirectMessage ??
     ((recipientUserId: string, text: string) =>
       sendXDirectMessage({
+        consumerKey: config.X_APP_KEY,
+        consumerSecret: config.X_APP_SECRET,
         accessToken: config.X_ACCESS_TOKEN,
+        accessSecret: config.X_ACCESS_SECRET,
         recipientUserId,
         text
       }));

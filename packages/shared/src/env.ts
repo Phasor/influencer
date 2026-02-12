@@ -1,6 +1,31 @@
 import * as dotenv from "dotenv";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
-dotenv.config();
+function loadDotenv(): void {
+  const configuredPath = process.env.DOTENV_CONFIG_PATH;
+  if (configuredPath) {
+    dotenv.config({ path: configuredPath });
+    return;
+  }
+
+  const candidates = [
+    resolve(process.cwd(), ".env"),
+    resolve(process.cwd(), "../../.env"),
+    resolve(__dirname, "../../../.env")
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      dotenv.config({ path: candidate });
+      return;
+    }
+  }
+
+  dotenv.config();
+}
+
+loadDotenv();
 
 const requiredEnvKeys = [
   "SUPABASE_URL",

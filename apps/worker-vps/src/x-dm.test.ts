@@ -16,15 +16,24 @@ describe("sendXDirectMessage", () => {
     );
 
     const result = await sendXDirectMessage({
+      consumerKey: "consumer-key",
+      consumerSecret: "consumer-secret",
       accessToken: "token",
+      accessSecret: "token-secret",
       recipientUserId: "user-1",
       text: "hi",
+      timestampFactory: () => 1_760_000_000,
+      nonceFactory: () => "nonce-1",
       fetchImpl
     });
 
     expect(result).toEqual({
       platformMessageId: "123"
     });
+    const [, requestInit] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const authorizationHeader = (requestInit.headers as Record<string, string>).authorization ?? "";
+    expect(authorizationHeader.startsWith("OAuth ")).toBe(true);
+    expect(authorizationHeader).toContain('oauth_signature_method="HMAC-SHA1"');
   });
 
   it("throws on unsuccessful status code", async () => {
@@ -32,7 +41,10 @@ describe("sendXDirectMessage", () => {
 
     await expect(
       sendXDirectMessage({
+        consumerKey: "consumer-key",
+        consumerSecret: "consumer-secret",
         accessToken: "token",
+        accessSecret: "token-secret",
         recipientUserId: "user-1",
         text: "hi",
         fetchImpl
@@ -45,7 +57,10 @@ describe("sendXDirectMessage", () => {
 
     await expect(
       sendXDirectMessage({
+        consumerKey: "consumer-key",
+        consumerSecret: "consumer-secret",
         accessToken: "token",
+        accessSecret: "token-secret",
         recipientUserId: "user-1",
         text: "hi",
         fetchImpl

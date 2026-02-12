@@ -8,6 +8,7 @@ import {
   computeRetryDelayMs,
   dedupeKeyForInboundMessage,
   markJobDone,
+  markJobFailed,
   recordOutboundSendAttempt
 } from "./db";
 
@@ -416,5 +417,38 @@ describe("consumeRateLimit", () => {
 
     expect(result.allowed).toBe(false);
     expect(result.count).toBe(3);
+  });
+});
+
+describe("markJobFailed", () => {
+  it("keeps run_after non-null when transitioning to failed", async () => {
+    const updatePayloads: Array<Record<string, unknown>> = [];
+    const updateChain = {
+      eq: vi.fn(),
+      error: null
+    };
+    updateChain.eq.mockReturnValue(updateChain);
+
+    const from = vi.fn().mockImplementationOnce(() => ({
+      update: vi.fn((payload: Record<string, unknown>) => {
+        updatePayloads.push(payload);
+        return updateChain;
+      })
+    }));
+
+    await markJobFailed({ from } as never, {
+      jobId: "job-failed-1",
+      attemptCount: 5,
+      maxAttempts: 5,
+      baseDelayMs: 1000,
+      nowIso: "2026-02-12T12:00:00.000Z",
+      errorCode: "worker_processing_error",
+      errorMessage: "boom"
+    });
+
+    expect(updatePayloads[0]).toMatchObject({
+      status: "failed",
+      run_after: "2026-02-12T12:00:00.000Z"
+    });
   });
 });
