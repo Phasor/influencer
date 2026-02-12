@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "apps/webhook-vercel" },
+    { "path": "apps/worker-vps" }
+  ]
+}

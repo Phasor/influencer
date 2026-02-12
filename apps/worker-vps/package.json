@@ -1,0 +1,17 @@
+{
+  "name": "@ai-influencer/worker-vps",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "start": "node dist/cli.js",
+    "admin:inspect-jobs": "node dist/admin-inspect-jobs.js"
+  },
+  "dependencies": {
+    "@ai-influencer/shared": "file:../../packages/shared"
+  }
+}
+
