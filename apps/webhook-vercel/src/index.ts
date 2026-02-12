@@ -4,9 +4,9 @@ import {
   createSupabaseServiceClient,
   type InboundDmEvent,
   ingestInboundDmEvent,
-  loadRuntimeConfig,
+  loadWebhookRuntimeConfig,
   normalizeXInboundDmEvent,
-  type RuntimeConfig,
+  type WebhookRuntimeConfig,
   verifyXWebhookSignature
 } from "@ai-influencer/shared";
 
@@ -23,7 +23,7 @@ type Logger = Pick<Console, "info" | "error">;
 type HandleWebhookPostDependencies = {
   logger?: Logger;
   requestIdFactory?: () => string;
-  runtimeConfig?: RuntimeConfig;
+  runtimeConfig?: WebhookRuntimeConfig;
   supabaseClient?: ReturnType<typeof createSupabaseServiceClient>;
   rawBody?: string;
   signatureHeader?: string | null;
@@ -65,7 +65,7 @@ export async function handleXWebhookPost(
   const verifySignature = dependencies.verifySignature ?? verifyXWebhookSignature;
 
   try {
-    const config = dependencies.runtimeConfig ?? loadRuntimeConfig();
+    const config = dependencies.runtimeConfig ?? loadWebhookRuntimeConfig();
     const signatureValid = verifySignature({
       rawBody: dependencies.rawBody ?? JSON.stringify(rawPayload),
       signatureHeader: dependencies.signatureHeader ?? null,

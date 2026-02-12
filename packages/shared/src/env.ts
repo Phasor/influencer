@@ -17,7 +17,14 @@ const requiredEnvKeys = [
   "MAX_REPLY_CHARS"
 ] as const;
 
+const requiredWebhookEnvKeys = [
+  "SUPABASE_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "X_WEBHOOK_SECRET"
+] as const;
+
 export type RequiredEnvKey = (typeof requiredEnvKeys)[number];
+export type RequiredWebhookEnvKey = (typeof requiredWebhookEnvKeys)[number];
 
 export type RuntimeConfig = {
   SUPABASE_URL: string;
@@ -34,11 +41,25 @@ export type RuntimeConfig = {
   MAX_REPLY_CHARS: number;
 };
 
-export function getMissingEnvKeys(env: NodeJS.ProcessEnv): RequiredEnvKey[] {
-  return requiredEnvKeys.filter((key) => {
+export type WebhookRuntimeConfig = {
+  SUPABASE_URL: string;
+  SUPABASE_SERVICE_ROLE_KEY: string;
+  X_WEBHOOK_SECRET: string;
+};
+
+function getMissingKeys<T extends readonly string[]>(env: NodeJS.ProcessEnv, keys: T): T[number][] {
+  return keys.filter((key) => {
     const value = env[key];
     return value === undefined || value.trim() === "";
   });
+}
+
+export function getMissingEnvKeys(env: NodeJS.ProcessEnv): RequiredEnvKey[] {
+  return getMissingKeys(env, requiredEnvKeys);
+}
+
+export function getMissingWebhookEnvKeys(env: NodeJS.ProcessEnv): RequiredWebhookEnvKey[] {
+  return getMissingKeys(env, requiredWebhookEnvKeys);
 }
 
 function parsePositiveInt(name: keyof RuntimeConfig, value: string): number {
@@ -74,5 +95,18 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       env.MAX_CONTEXT_MESSAGES as string
     ),
     MAX_REPLY_CHARS: parsePositiveInt("MAX_REPLY_CHARS", env.MAX_REPLY_CHARS as string)
+  };
+}
+
+export function loadWebhookRuntimeConfig(env: NodeJS.ProcessEnv = process.env): WebhookRuntimeConfig {
+  const missing = getMissingWebhookEnvKeys(env);
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
+  }
+
+  return {
+    SUPABASE_URL: env.SUPABASE_URL as string,
+    SUPABASE_SERVICE_ROLE_KEY: env.SUPABASE_SERVICE_ROLE_KEY as string,
+    X_WEBHOOK_SECRET: env.X_WEBHOOK_SECRET as string
   };
 }

@@ -12,16 +12,7 @@ type InjectedRuntimeConfig = Exclude<RuntimeConfigDependency, undefined>;
 const runtimeConfig: InjectedRuntimeConfig = {
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_SERVICE_ROLE_KEY: "test-service-key",
-  OPENROUTER_API_KEY: "test-openrouter-key",
-  OPENROUTER_MODEL: "test-model",
-  X_APP_KEY: "test-x-app-key",
-  X_APP_SECRET: "test-x-app-secret",
-  X_ACCESS_TOKEN: "test-x-access-token",
-  X_ACCESS_SECRET: "test-x-access-secret",
-  X_WEBHOOK_SECRET: "test-webhook-secret",
-  WORKER_POLL_INTERVAL_MS: 1000,
-  MAX_CONTEXT_MESSAGES: 20,
-  MAX_REPLY_CHARS: 500
+  X_WEBHOOK_SECRET: "test-webhook-secret"
 };
 
 describe("handleXWebhookPost", () => {

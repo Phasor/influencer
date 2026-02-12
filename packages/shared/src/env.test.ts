@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { getMissingEnvKeys, loadRuntimeConfig } from "./env";
+import {
+  getMissingEnvKeys,
+  getMissingWebhookEnvKeys,
+  loadRuntimeConfig,
+  loadWebhookRuntimeConfig
+} from "./env";
 
 describe("getMissingEnvKeys", () => {
   it("returns all required keys when env is empty", () => {
@@ -40,5 +45,25 @@ describe("loadRuntimeConfig", () => {
     expect(() => {
       loadRuntimeConfig({ ...baseEnv, MAX_REPLY_CHARS: "not-a-number" });
     }).toThrow("MAX_REPLY_CHARS");
+  });
+});
+
+describe("loadWebhookRuntimeConfig", () => {
+  it("requires only webhook-specific environment keys", () => {
+    const result = loadWebhookRuntimeConfig({
+      SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role",
+      X_WEBHOOK_SECRET: "webhook-secret"
+    });
+
+    expect(result.SUPABASE_URL).toBe("https://example.supabase.co");
+    expect(result.X_WEBHOOK_SECRET).toBe("webhook-secret");
+  });
+
+  it("reports missing webhook env keys", () => {
+    expect(getMissingWebhookEnvKeys({ SUPABASE_URL: "x" })).toEqual([
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "X_WEBHOOK_SECRET"
+    ]);
   });
 });
