@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "npm install --prefix ../../packages/shared && npm run build --prefix ../../packages/shared && tsc -b",
+    "build": "npm install --prefix ../../packages/shared && npm run build --prefix ../../packages/shared && tsc -b && node -e \"require('fs').mkdirSync('public',{ recursive: true })\"",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
