@@ -67,4 +67,29 @@ describe("sendXDirectMessage", () => {
       })
     ).rejects.toThrow("response missing message id");
   });
+
+  it("accepts dm_event_id as the outbound platform message id", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          data: {
+            dm_event_id: "dm-evt-123"
+          }
+        }),
+        { status: 200 }
+      )
+    );
+
+    const result = await sendXDirectMessage({
+      consumerKey: "consumer-key",
+      consumerSecret: "consumer-secret",
+      accessToken: "token",
+      accessSecret: "token-secret",
+      recipientUserId: "user-1",
+      text: "hi",
+      fetchImpl
+    });
+
+    expect(result.platformMessageId).toBe("dm-evt-123");
+  });
 });

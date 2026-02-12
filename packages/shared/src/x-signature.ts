@@ -9,6 +9,11 @@ export function createXWebhookSignature(rawBody: string, webhookSecret: string):
   return createHmac("sha256", webhookSecret).update(rawBody, "utf8").digest("base64");
 }
 
+export function createXWebhookCrcResponseToken(crcToken: string, webhookSecret: string): string {
+  const digest = createHmac("sha256", webhookSecret).update(crcToken, "utf8").digest("base64");
+  return `sha256=${digest}`;
+}
+
 export function verifyXWebhookSignature(params: {
   rawBody: string;
   signatureHeader: string | null | undefined;

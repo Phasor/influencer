@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  createXWebhookCrcResponseToken,
   createSupabaseServiceClient,
   type InboundDmEvent,
   ingestInboundDmEvent,
@@ -49,6 +50,10 @@ export type VercelWebhookHandlerDependencies = Omit<
   HandleWebhookPostDependencies,
   "rawBody" | "signatureHeader"
 >;
+
+type CrcResponse = {
+  response_token: string;
+};
 
 function isInvalidPayloadError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith("Invalid X DM payload:");
@@ -161,6 +166,50 @@ function jsonResponse(body: WebhookResponse["body"], status: number): Response {
   });
 }
 
+function jsonCrcResponse(body: CrcResponse, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json"
+    }
+  });
+}
+
+export function createVercelWebhookGetHandler(dependencies: VercelWebhookHandlerDependencies = {}) {
+  return async function GET(request: Request): Promise<Response> {
+    const requestId = dependencies.requestIdFactory?.() ?? randomUUID();
+    const logger = dependencies.logger ?? console;
+    const crcToken = new URL(request.url).searchParams.get("crc_token")?.trim();
+
+    if (!crcToken) {
+      logger.error(
+        JSON.stringify({
+          event: "crc_rejected",
+          request_id: requestId,
+          status: 400,
+          error_message: "missing crc_token"
+        })
+      );
+      return new Response(JSON.stringify({ ok: false, requestId }), {
+        status: 400,
+        headers: {
+          "content-type": "application/json"
+        }
+      });
+    }
+
+    const config = dependencies.runtimeConfig ?? loadWebhookRuntimeConfig();
+    const responseToken = createXWebhookCrcResponseToken(crcToken, config.X_WEBHOOK_SECRET);
+    logger.info(
+      JSON.stringify({
+        event: "crc_accepted",
+        request_id: requestId
+      })
+    );
+    return jsonCrcResponse({ response_token: responseToken }, 200);
+  };
+}
+
 export function createVercelWebhookPostHandler(dependencies: VercelWebhookHandlerDependencies = {}) {
   return async function POST(request: Request): Promise<Response> {
     const rawBody = await request.text();
@@ -190,3 +239,4 @@ export function createVercelWebhookPostHandler(dependencies: VercelWebhookHandle
 }
 
 export const POST = createVercelWebhookPostHandler();
+export const GET = createVercelWebhookGetHandler();

@@ -16,6 +16,9 @@ export type SendXDirectMessageParams = {
 type XDmResponse = {
   data?: {
     id?: string;
+    dm_event_id?: string;
+    event_id?: string;
+    message_id?: string;
   };
 };
 
@@ -138,7 +141,11 @@ export async function sendXDirectMessage(
   }
 
   const json = (await response.json()) as XDmResponse;
-  const platformMessageId = json.data?.id?.trim();
+  const platformMessageId =
+    json.data?.id?.trim() ??
+    json.data?.dm_event_id?.trim() ??
+    json.data?.event_id?.trim() ??
+    json.data?.message_id?.trim();
   if (!platformMessageId) {
     throw new Error("X DM send failed: response missing message id");
   }

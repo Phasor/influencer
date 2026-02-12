@@ -1,1 +1,1 @@
-export { POST } from "../../src/index";
+export { GET, POST } from "../../src/index";

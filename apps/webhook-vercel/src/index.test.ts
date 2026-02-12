@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createXWebhookSignature } from "@ai-influencer/shared";
+import { createXWebhookCrcResponseToken, createXWebhookSignature } from "@ai-influencer/shared";
 
-import { createVercelWebhookPostHandler, handleXWebhookPost } from "./index";
+import {
+  createVercelWebhookGetHandler,
+  createVercelWebhookPostHandler,
+  handleXWebhookPost
+} from "./index";
 
 type SupabaseClientDependency = NonNullable<Parameters<typeof handleXWebhookPost>[1]>["supabaseClient"];
 type InjectedSupabaseClient = Exclude<SupabaseClientDependency, undefined>;
@@ -191,6 +195,43 @@ describe("createVercelWebhookPostHandler", () => {
     await expect(response.json()).resolves.toEqual({
       ok: false,
       requestId: "req-route-bad-json"
+    });
+  });
+});
+
+describe("createVercelWebhookGetHandler", () => {
+  it("returns crc response token for a valid challenge request", async () => {
+    const GET = createVercelWebhookGetHandler({
+      runtimeConfig,
+      requestIdFactory: () => "req-crc-1",
+      logger: {
+        info: vi.fn(),
+        error: vi.fn()
+      }
+    });
+
+    const request = new Request("https://example.com/api/x/webhook?crc_token=test-crc-token", {
+      method: "GET"
+    });
+
+    const response = await GET(request);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      response_token: createXWebhookCrcResponseToken("test-crc-token", runtimeConfig.X_WEBHOOK_SECRET)
+    });
+  });
+
+  it("returns 400 when crc_token is missing", async () => {
+    const GET = createVercelWebhookGetHandler({
+      runtimeConfig,
+      requestIdFactory: () => "req-crc-missing"
+    });
+    const response = await GET(new Request("https://example.com/api/x/webhook", { method: "GET" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      requestId: "req-crc-missing"
     });
   });
 });

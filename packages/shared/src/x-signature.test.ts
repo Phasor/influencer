@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { createXWebhookSignature, verifyXWebhookSignature } from "./x-signature";
+import {
+  createXWebhookCrcResponseToken,
+  createXWebhookSignature,
+  verifyXWebhookSignature
+} from "./x-signature";
+
+describe("createXWebhookCrcResponseToken", () => {
+  it("returns a sha256-prefixed base64 token for crc challenge responses", () => {
+    const responseToken = createXWebhookCrcResponseToken("crc-token", "test-secret");
+    expect(responseToken.startsWith("sha256=")).toBe(true);
+  });
+});
 
 describe("verifyXWebhookSignature", () => {
   it("accepts a valid signature", () => {
