@@ -9,6 +9,8 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.8"
+    "@supabase/supabase-js": "^2.49.8",
+    "@types/node": "^22.13.10",
+    "dotenv": "^16.4.7"
   }
 }
