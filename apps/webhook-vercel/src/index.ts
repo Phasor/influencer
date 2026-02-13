@@ -59,6 +59,43 @@ function isInvalidPayloadError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith("Invalid X DM payload:");
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function isSelfAuthoredDmEvent(rawPayload: unknown): boolean {
+  const root = asRecord(rawPayload);
+  if (!root) {
+    return false;
+  }
+
+  const forUserId = asNonEmptyString(root.for_user_id);
+  const directMessageEvents = Array.isArray(root.direct_message_events) ? root.direct_message_events : null;
+  if (!forUserId || !directMessageEvents || directMessageEvents.length === 0) {
+    return false;
+  }
+
+  const firstEvent = asRecord(directMessageEvents[0]);
+  const messageCreate = asRecord(firstEvent?.message_create);
+  const senderId = asNonEmptyString(messageCreate?.sender_id);
+  if (!senderId) {
+    return false;
+  }
+
+  return senderId === forUserId;
+}
+
 export async function handleXWebhookPost(
   rawPayload: unknown,
   dependencies: HandleWebhookPostDependencies = {}
@@ -91,6 +128,22 @@ export async function handleXWebhookPost(
         status: 401,
         body: {
           ok: false,
+          requestId
+        }
+      };
+    }
+
+    if (isSelfAuthoredDmEvent(rawPayload)) {
+      logger.info(
+        JSON.stringify({
+          event: "inbound_ignored_self_message",
+          request_id: requestId
+        })
+      );
+      return {
+        status: 200,
+        body: {
+          ok: true,
           requestId
         }
       };

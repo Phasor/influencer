@@ -119,6 +119,66 @@ describe("handleXWebhookPost", () => {
     });
     expect(logger.error).toHaveBeenCalledTimes(1);
   });
+
+  it("returns 200 and skips ingest for self-authored outbound DM events", async () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn()
+    };
+    const normalizeEvent = vi.fn(() => ({
+      platform: "x" as const,
+      platformMessageId: "pm-should-not-normalize",
+      platformUserId: "bot-user",
+      receivedAtIso: "2026-02-11T00:00:00.000Z",
+      text: "should not run"
+    }));
+    const ingestEvent = vi.fn(async () => ({
+      conversationId: "conv-ignored",
+      messageId: "msg-ignored",
+      jobId: "job-ignored",
+      messageCreated: false,
+      jobCreated: false
+    }));
+
+    const response = await handleXWebhookPost(
+      {
+        for_user_id: "bot-user",
+        direct_message_events: [
+          {
+            type: "message_create",
+            id: "outbound-id",
+            created_timestamp: "1760000000000",
+            message_create: {
+              sender_id: "bot-user",
+              message_data: {
+                text: "my own outbound"
+              }
+            }
+          }
+        ]
+      },
+      {
+        requestIdFactory: () => "req-self-1",
+        logger,
+        runtimeConfig,
+        supabaseClient: {} as InjectedSupabaseClient,
+        signatureHeader: "sha256=test",
+        verifySignature: () => true,
+        normalizeEvent,
+        ingestEvent
+      }
+    );
+
+    expect(response).toEqual({
+      status: 200,
+      body: {
+        ok: true,
+        requestId: "req-self-1"
+      }
+    });
+    expect(normalizeEvent).not.toHaveBeenCalled();
+    expect(ingestEvent).not.toHaveBeenCalled();
+  });
 });
 
 describe("createVercelWebhookPostHandler", () => {
