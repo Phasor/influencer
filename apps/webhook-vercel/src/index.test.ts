@@ -59,7 +59,7 @@ describe("handleXWebhookPost", () => {
         requestId: "req-1"
       }
     });
-    expect(logger.info).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
   });
 
@@ -90,7 +90,7 @@ describe("handleXWebhookPost", () => {
     expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
-  it("returns 400 for invalid payload normalization error", async () => {
+  it("returns 200 when payload has no direct message events", async () => {
     const logger = {
       info: vi.fn(),
       error: vi.fn()
@@ -111,13 +111,13 @@ describe("handleXWebhookPost", () => {
     );
 
     expect(response).toEqual({
-      status: 400,
+      status: 200,
       body: {
-        ok: false,
+        ok: true,
         requestId: "req-2"
       }
     });
-    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it("returns 200 and skips ingest for self-authored outbound DM events", async () => {
@@ -178,6 +178,183 @@ describe("handleXWebhookPost", () => {
     });
     expect(normalizeEvent).not.toHaveBeenCalled();
     expect(ingestEvent).not.toHaveBeenCalled();
+  });
+
+  it("processes inbound events even when the first event is self-authored", async () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn()
+    };
+    const normalizeEvent = vi.fn((payload: unknown) => {
+      const root = payload as {
+        direct_message_events: Array<{
+          id: string;
+          message_create: {
+            sender_id: string;
+            message_data: {
+              text: string;
+            };
+          };
+          created_timestamp: string;
+        }>;
+      };
+      const singleEvent = root.direct_message_events[0];
+      return {
+        platform: "x" as const,
+        platformMessageId: singleEvent.id,
+        platformUserId: singleEvent.message_create.sender_id,
+        receivedAtIso: new Date(Number(singleEvent.created_timestamp)).toISOString(),
+        text: singleEvent.message_create.message_data.text
+      };
+    });
+    const ingestEvent = vi.fn(async () => ({
+      conversationId: "conv-1",
+      messageId: "msg-1",
+      jobId: "job-1",
+      messageCreated: true,
+      jobCreated: true
+    }));
+
+    const response = await handleXWebhookPost(
+      {
+        for_user_id: "bot-user",
+        direct_message_events: [
+          {
+            type: "message_create",
+            id: "outbound-id",
+            created_timestamp: "1760000000000",
+            message_create: {
+              sender_id: "bot-user",
+              message_data: {
+                text: "my own outbound"
+              }
+            }
+          },
+          {
+            type: "message_create",
+            id: "inbound-id",
+            created_timestamp: "1760000001000",
+            message_create: {
+              sender_id: "user-123",
+              message_data: {
+                text: "hello from user"
+              }
+            }
+          }
+        ]
+      },
+      {
+        requestIdFactory: () => "req-self-mixed-1",
+        logger,
+        runtimeConfig,
+        supabaseClient: {} as InjectedSupabaseClient,
+        signatureHeader: "sha256=test",
+        verifySignature: () => true,
+        normalizeEvent,
+        ingestEvent
+      }
+    );
+
+    expect(response).toEqual({
+      status: 200,
+      body: {
+        ok: true,
+        requestId: "req-self-mixed-1"
+      }
+    });
+    expect(normalizeEvent).toHaveBeenCalledTimes(1);
+    expect(ingestEvent).toHaveBeenCalledTimes(1);
+    expect(ingestEvent.mock.calls[0]?.[1]).toMatchObject({
+      platformMessageId: "inbound-id",
+      platformUserId: "user-123"
+    });
+  });
+
+  it("skips unsupported events in a batch and still ingests valid events", async () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn()
+    };
+    const normalizeEvent = vi.fn((payload: unknown) => {
+      const root = payload as {
+        direct_message_events: Array<{
+          type: string;
+          id: string;
+          created_timestamp: string;
+          message_create?: {
+            sender_id: string;
+            message_data: {
+              text: string;
+            };
+          };
+        }>;
+      };
+      const singleEvent = root.direct_message_events[0];
+      if (singleEvent.type !== "message_create" || !singleEvent.message_create) {
+        throw new Error("Invalid X DM payload: unsupported direct message event type.");
+      }
+      return {
+        platform: "x" as const,
+        platformMessageId: singleEvent.id,
+        platformUserId: singleEvent.message_create.sender_id,
+        receivedAtIso: new Date(Number(singleEvent.created_timestamp)).toISOString(),
+        text: singleEvent.message_create.message_data.text
+      };
+    });
+    const ingestEvent = vi.fn(async () => ({
+      conversationId: "conv-1",
+      messageId: "msg-1",
+      jobId: "job-1",
+      messageCreated: true,
+      jobCreated: true
+    }));
+
+    const response = await handleXWebhookPost(
+      {
+        direct_message_events: [
+          {
+            type: "participants_join",
+            id: "unsupported-id",
+            created_timestamp: "1760000000000"
+          },
+          {
+            type: "message_create",
+            id: "inbound-valid-id",
+            created_timestamp: "1760000001000",
+            message_create: {
+              sender_id: "user-456",
+              message_data: {
+                text: "still process this"
+              }
+            }
+          }
+        ]
+      },
+      {
+        requestIdFactory: () => "req-mixed-unsupported-1",
+        logger,
+        runtimeConfig,
+        supabaseClient: {} as InjectedSupabaseClient,
+        signatureHeader: "sha256=test",
+        verifySignature: () => true,
+        normalizeEvent,
+        ingestEvent
+      }
+    );
+
+    expect(response).toEqual({
+      status: 200,
+      body: {
+        ok: true,
+        requestId: "req-mixed-unsupported-1"
+      }
+    });
+    expect(normalizeEvent).toHaveBeenCalledTimes(2);
+    expect(ingestEvent).toHaveBeenCalledTimes(1);
+    expect(ingestEvent.mock.calls[0]?.[1]).toMatchObject({
+      platformMessageId: "inbound-valid-id",
+      platformUserId: "user-456"
+    });
   });
 });
 

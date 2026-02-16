@@ -74,20 +74,18 @@ function asNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function isSelfAuthoredDmEvent(rawPayload: unknown): boolean {
-  const root = asRecord(rawPayload);
-  if (!root) {
-    return false;
-  }
-
+function isSelfAuthoredDmEvent(root: Record<string, unknown>, rawEvent: unknown): boolean {
   const forUserId = asNonEmptyString(root.for_user_id);
-  const directMessageEvents = Array.isArray(root.direct_message_events) ? root.direct_message_events : null;
-  if (!forUserId || !directMessageEvents || directMessageEvents.length === 0) {
+  if (!forUserId) {
     return false;
   }
 
-  const firstEvent = asRecord(directMessageEvents[0]);
-  const messageCreate = asRecord(firstEvent?.message_create);
+  const event = asRecord(rawEvent);
+  if (!event) {
+    return false;
+  }
+
+  const messageCreate = asRecord(event.message_create);
   const senderId = asNonEmptyString(messageCreate?.sender_id);
   if (!senderId) {
     return false;
@@ -133,10 +131,15 @@ export async function handleXWebhookPost(
       };
     }
 
-    if (isSelfAuthoredDmEvent(rawPayload)) {
+    const rootPayload = asRecord(rawPayload);
+    const directMessageEvents = Array.isArray(rootPayload?.direct_message_events)
+      ? rootPayload.direct_message_events
+      : [];
+
+    if (directMessageEvents.length === 0) {
       logger.info(
         JSON.stringify({
-          event: "inbound_ignored_self_message",
+          event: "inbound_ignored_no_direct_message_events",
           request_id: requestId
         })
       );
@@ -149,20 +152,72 @@ export async function handleXWebhookPost(
       };
     }
 
-    const event = normalizeEvent(rawPayload);
     const supabaseClient =
       dependencies.supabaseClient ??
       createSupabaseServiceClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY);
 
-    const ingestResult = await ingestEvent(supabaseClient, event);
+    let accepted = 0;
+    let skippedSelf = 0;
+    let skippedInvalid = 0;
+
+    for (const rawEvent of directMessageEvents) {
+      if (rootPayload && isSelfAuthoredDmEvent(rootPayload, rawEvent)) {
+        skippedSelf += 1;
+        logger.info(
+          JSON.stringify({
+            event: "inbound_ignored_self_message",
+            request_id: requestId
+          })
+        );
+        continue;
+      }
+
+      const normalizedPayload = rootPayload
+        ? {
+            ...rootPayload,
+            direct_message_events: [rawEvent]
+          }
+        : rawPayload;
+
+      let event: InboundDmEvent;
+      try {
+        event = normalizeEvent(normalizedPayload);
+      } catch (error) {
+        if (!isInvalidPayloadError(error)) {
+          throw error;
+        }
+        skippedInvalid += 1;
+        logger.info(
+          JSON.stringify({
+            event: "inbound_ignored_unsupported_event",
+            request_id: requestId,
+            error_message: error.message
+          })
+        );
+        continue;
+      }
+
+      const ingestResult = await ingestEvent(supabaseClient, event);
+      accepted += 1;
+      logger.info(
+        JSON.stringify({
+          event: "inbound_accepted",
+          request_id: requestId,
+          message_id: event.platformMessageId,
+          conversation_id: ingestResult.conversationId,
+          job_id: ingestResult.jobId
+        })
+      );
+    }
 
     logger.info(
       JSON.stringify({
-        event: "inbound_accepted",
+        event: "inbound_batch_processed",
         request_id: requestId,
-        message_id: event.platformMessageId,
-        conversation_id: ingestResult.conversationId,
-        job_id: ingestResult.jobId
+        total_events: directMessageEvents.length,
+        accepted,
+        skipped_self: skippedSelf,
+        skipped_invalid: skippedInvalid
       })
     );
 
