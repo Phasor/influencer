@@ -17,9 +17,13 @@ const runtimeConfig: RuntimeConfig = {
   X_ACCESS_TOKEN: "x-access-token",
   X_ACCESS_SECRET: "x-access-secret",
   X_WEBHOOK_SECRET: "x-webhook-secret",
+  X_WEBHOOK_ID: null,
   WORKER_POLL_INTERVAL_MS: 25,
   MAX_CONTEXT_MESSAGES: 20,
-  MAX_REPLY_CHARS: 500
+  MAX_REPLY_CHARS: 500,
+  ENABLE_X_REPLAY_BACKFILL: false,
+  X_REPLAY_INTERVAL_MS: 300000,
+  X_REPLAY_WINDOW_MINUTES: 120
 };
 
 describe("buildRecentConversationMessages", () => {
@@ -101,6 +105,33 @@ describe("createWorkerRuntime", () => {
 
     await runtime.runUntilStopped(controller.signal);
     expect(sleep).toHaveBeenCalledWith(runtimeConfig.WORKER_POLL_INTERVAL_MS);
+  });
+
+  it("runUntilStopped triggers replay requests when enabled", async () => {
+    const claimJob = vi.fn(async () => null);
+    const sleep = vi.fn(async () => {});
+    const requestReplayBackfill = vi.fn(async () => {});
+    const replayConfig: RuntimeConfig = {
+      ...runtimeConfig,
+      ENABLE_X_REPLAY_BACKFILL: true,
+      X_WEBHOOK_ID: "webhook-123",
+      X_REPLAY_INTERVAL_MS: -1
+    };
+    const runtime = createWorkerRuntime({
+      runtimeConfig: replayConfig,
+      workerId: "worker-test",
+      claimJob,
+      sleep,
+      requestReplayBackfill
+    });
+
+    const controller = new AbortController();
+    sleep.mockImplementationOnce(async () => {
+      controller.abort();
+    });
+
+    await runtime.runUntilStopped(controller.signal);
+    expect(requestReplayBackfill).toHaveBeenCalledTimes(1);
   });
 
   it("runOnce executes the default job pipeline with mocked integrations", async () => {

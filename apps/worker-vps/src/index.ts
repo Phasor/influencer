@@ -25,6 +25,7 @@ import {
 
 import { generateOpenRouterReply, type OpenRouterChatMessage } from "./openrouter";
 import { sendXDirectMessage } from "./x-dm";
+import { computeReplayWindow, requestXReplayBackfill } from "./x-replay";
 
 type Logger = Pick<Console, "info" | "error">;
 
@@ -77,6 +78,7 @@ type WorkerDependencies = {
     errorMessage: string;
     errorStack?: string;
   }) => Promise<void>;
+  requestReplayBackfill?: (window: { fromDateUtcMinute: string; toDateUtcMinute: string }) => Promise<void>;
 };
 
 type OpenRouterMessage = {
@@ -529,6 +531,20 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
         markDone,
         markFailed
       }));
+  const requestReplayBackfill =
+    dependencies.requestReplayBackfill ??
+    (async (window: { fromDateUtcMinute: string; toDateUtcMinute: string }) => {
+      if (!config.X_WEBHOOK_ID) {
+        return;
+      }
+      await requestXReplayBackfill({
+        appKey: config.X_APP_KEY,
+        appSecret: config.X_APP_SECRET,
+        webhookId: config.X_WEBHOOK_ID,
+        fromDateUtcMinute: window.fromDateUtcMinute,
+        toDateUtcMinute: window.toDateUtcMinute
+      });
+    });
 
   async function runOnce(): Promise<boolean> {
     const nowIso = nowIsoFactory();
@@ -556,6 +572,7 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
 
   async function runUntilStopped(signal: AbortSignal): Promise<void> {
     let nextHealthLogAtMs = Date.now() + HEALTH_LOG_INTERVAL_MS;
+    let nextReplayAtMs = Date.now() + config.X_REPLAY_INTERVAL_MS;
     while (!signal.aborted) {
       const didWork = await runOnce();
       const nowMs = Date.now();
@@ -568,6 +585,29 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
           })
         );
         nextHealthLogAtMs = nowMs + HEALTH_LOG_INTERVAL_MS;
+      }
+      if (config.ENABLE_X_REPLAY_BACKFILL && nowMs >= nextReplayAtMs) {
+        const replayWindow = computeReplayWindow(new Date(nowMs), config.X_REPLAY_WINDOW_MINUTES);
+        try {
+          await requestReplayBackfill(replayWindow);
+          logger.info(
+            JSON.stringify({
+              event: "replay_backfill_requested",
+              worker_id: workerId,
+              from_date: replayWindow.fromDateUtcMinute,
+              to_date: replayWindow.toDateUtcMinute
+            })
+          );
+        } catch (error) {
+          logger.error(
+            JSON.stringify({
+              event: "replay_backfill_request_failed",
+              worker_id: workerId,
+              error_message: error instanceof Error ? error.message : "unknown replay error"
+            })
+          );
+        }
+        nextReplayAtMs = nowMs + config.X_REPLAY_INTERVAL_MS;
       }
       if (!didWork) {
         await sleep(config.WORKER_POLL_INTERVAL_MS);

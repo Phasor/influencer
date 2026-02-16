@@ -28,9 +28,11 @@ describe("loadRuntimeConfig", () => {
     X_ACCESS_TOKEN: "access-token",
     X_ACCESS_SECRET: "access-secret",
     X_WEBHOOK_SECRET: "webhook-secret",
+    X_WEBHOOK_ID: "webhook-id",
     WORKER_POLL_INTERVAL_MS: "1000",
     MAX_CONTEXT_MESSAGES: "20",
-    MAX_REPLY_CHARS: "500"
+    MAX_REPLY_CHARS: "500",
+    ENABLE_X_REPLAY_BACKFILL: "false"
   };
 
   it("parses numeric values and returns runtime config", () => {
@@ -39,12 +41,25 @@ describe("loadRuntimeConfig", () => {
     expect(result.WORKER_POLL_INTERVAL_MS).toBe(1000);
     expect(result.MAX_CONTEXT_MESSAGES).toBe(20);
     expect(result.MAX_REPLY_CHARS).toBe(500);
+    expect(result.ENABLE_X_REPLAY_BACKFILL).toBe(false);
+    expect(result.X_REPLAY_INTERVAL_MS).toBe(300000);
+    expect(result.X_REPLAY_WINDOW_MINUTES).toBe(120);
   });
 
   it("throws for invalid numeric configuration", () => {
     expect(() => {
       loadRuntimeConfig({ ...baseEnv, MAX_REPLY_CHARS: "not-a-number" });
     }).toThrow("MAX_REPLY_CHARS");
+  });
+
+  it("requires webhook id when replay backfill is enabled", () => {
+    expect(() => {
+      loadRuntimeConfig({
+        ...baseEnv,
+        X_WEBHOOK_ID: "",
+        ENABLE_X_REPLAY_BACKFILL: "true"
+      });
+    }).toThrow("X_WEBHOOK_ID");
   });
 });
 

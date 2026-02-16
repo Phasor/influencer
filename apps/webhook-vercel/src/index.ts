@@ -191,7 +191,7 @@ export async function handleXWebhookPost(
           JSON.stringify({
             event: "inbound_ignored_unsupported_event",
             request_id: requestId,
-            error_message: error.message
+            error_message: error instanceof Error ? error.message : "unknown invalid payload error"
           })
         );
         continue;

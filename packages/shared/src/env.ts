@@ -61,9 +61,13 @@ export type RuntimeConfig = {
   X_ACCESS_TOKEN: string;
   X_ACCESS_SECRET: string;
   X_WEBHOOK_SECRET: string;
+  X_WEBHOOK_ID: string | null;
   WORKER_POLL_INTERVAL_MS: number;
   MAX_CONTEXT_MESSAGES: number;
   MAX_REPLY_CHARS: number;
+  ENABLE_X_REPLAY_BACKFILL: boolean;
+  X_REPLAY_INTERVAL_MS: number;
+  X_REPLAY_WINDOW_MINUTES: number;
 };
 
 export type WebhookRuntimeConfig = {
@@ -95,10 +99,41 @@ function parsePositiveInt(name: keyof RuntimeConfig, value: string): number {
   return parsed;
 }
 
+function parseBoolean(name: keyof RuntimeConfig, value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Environment variable ${name} must be a boolean-like value.`);
+}
+
+function parseOptionalPositiveInt(
+  name: keyof RuntimeConfig,
+  value: string | undefined,
+  defaultValue: number
+): number {
+  if (!value || value.trim().length === 0) {
+    return defaultValue;
+  }
+  return parsePositiveInt(name, value);
+}
+
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const missing = getMissingEnvKeys(env);
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
+  }
+
+  const replayBackfillEnabled = parseBoolean(
+    "ENABLE_X_REPLAY_BACKFILL",
+    env.ENABLE_X_REPLAY_BACKFILL ?? "false"
+  );
+  const webhookId = env.X_WEBHOOK_ID?.trim() || null;
+  if (replayBackfillEnabled && !webhookId) {
+    throw new Error("Environment variable X_WEBHOOK_ID is required when ENABLE_X_REPLAY_BACKFILL is true.");
   }
 
   return {
@@ -111,6 +146,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
     X_ACCESS_TOKEN: env.X_ACCESS_TOKEN as string,
     X_ACCESS_SECRET: env.X_ACCESS_SECRET as string,
     X_WEBHOOK_SECRET: env.X_WEBHOOK_SECRET as string,
+    X_WEBHOOK_ID: webhookId,
     WORKER_POLL_INTERVAL_MS: parsePositiveInt(
       "WORKER_POLL_INTERVAL_MS",
       env.WORKER_POLL_INTERVAL_MS as string
@@ -119,7 +155,18 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       "MAX_CONTEXT_MESSAGES",
       env.MAX_CONTEXT_MESSAGES as string
     ),
-    MAX_REPLY_CHARS: parsePositiveInt("MAX_REPLY_CHARS", env.MAX_REPLY_CHARS as string)
+    MAX_REPLY_CHARS: parsePositiveInt("MAX_REPLY_CHARS", env.MAX_REPLY_CHARS as string),
+    ENABLE_X_REPLAY_BACKFILL: replayBackfillEnabled,
+    X_REPLAY_INTERVAL_MS: parseOptionalPositiveInt(
+      "X_REPLAY_INTERVAL_MS",
+      env.X_REPLAY_INTERVAL_MS,
+      300_000
+    ),
+    X_REPLAY_WINDOW_MINUTES: parseOptionalPositiveInt(
+      "X_REPLAY_WINDOW_MINUTES",
+      env.X_REPLAY_WINDOW_MINUTES,
+      120
+    )
   };
 }
 

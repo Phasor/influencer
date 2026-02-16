@@ -43,6 +43,8 @@ Implemented so far:
   - `npm run --workspace @ai-influencer/worker-vps start`
 - Inspect queue status snapshot:
   - `npm run --workspace @ai-influencer/worker-vps admin:inspect-jobs`
+- Inspect delivery lag/queue health snapshot (exit code `2` when degraded):
+  - `npm run --workspace @ai-influencer/worker-vps admin:delivery-health`
 
 The worker emits a `worker_heartbeat` structured log roughly once per minute.
 
@@ -60,9 +62,16 @@ Required:
 - `X_ACCESS_TOKEN`
 - `X_ACCESS_SECRET`
 - `X_WEBHOOK_SECRET`
+- `X_WEBHOOK_ID` (required only if replay backfill is enabled)
 - `WORKER_POLL_INTERVAL_MS`
 - `MAX_CONTEXT_MESSAGES`
 - `MAX_REPLY_CHARS`
+
+Optional reliability settings:
+- `ENABLE_X_REPLAY_BACKFILL` (default: `false`)
+- `X_REPLAY_INTERVAL_MS` (default: `300000`)
+- `X_REPLAY_WINDOW_MINUTES` (default: `120`)
+- `DELIVERY_LAG_ALERT_MINUTES` (default: `20`, used by `admin:delivery-health`)
 
 ## Notes
 

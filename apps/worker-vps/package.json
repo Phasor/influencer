@@ -8,7 +8,8 @@
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
     "start": "node dist/cli.js",
-    "admin:inspect-jobs": "node dist/admin-inspect-jobs.js"
+    "admin:inspect-jobs": "node dist/admin-inspect-jobs.js",
+    "admin:delivery-health": "node dist/admin-delivery-health.js"
   },
   "dependencies": {
     "@ai-influencer/shared": "file:../../packages/shared"
