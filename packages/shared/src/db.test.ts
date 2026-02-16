@@ -7,6 +7,7 @@ import {
   computeJobFailureTransition,
   computeRetryDelayMs,
   dedupeKeyForInboundMessage,
+  dedupeKeyForWebhookReceipt,
   markJobDone,
   markJobFailed,
   recordOutboundSendAttempt
@@ -15,6 +16,12 @@ import {
 describe("dedupeKeyForInboundMessage", () => {
   it("creates stable dedupe keys for inbound X DMs", () => {
     expect(dedupeKeyForInboundMessage("12345")).toBe("x_dm_inbound:12345");
+  });
+});
+
+describe("dedupeKeyForWebhookReceipt", () => {
+  it("creates stable dedupe keys for webhook receipt jobs", () => {
+    expect(dedupeKeyForWebhookReceipt("abc")).toBe("x_webhook_receipt:abc");
   });
 });
 

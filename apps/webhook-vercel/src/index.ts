@@ -3,10 +3,10 @@ import { randomUUID } from "node:crypto";
 import {
   createXWebhookCrcResponseToken,
   createSupabaseServiceClient,
-  type InboundDmEvent,
-  ingestInboundDmEvent,
+  dedupeKeyForWebhookReceipt,
+  enqueueJob,
+  insertWebhookReceipt,
   loadWebhookRuntimeConfig,
-  normalizeXInboundDmEvent,
   type WebhookRuntimeConfig,
   verifyXWebhookSignature
 } from "@ai-influencer/shared";
@@ -28,20 +28,26 @@ type HandleWebhookPostDependencies = {
   supabaseClient?: ReturnType<typeof createSupabaseServiceClient>;
   rawBody?: string;
   signatureHeader?: string | null;
-  normalizeEvent?: (rawPayload: unknown) => InboundDmEvent;
   verifySignature?: (params: {
     rawBody: string;
     signatureHeader: string | null | undefined;
     webhookSecret: string;
   }) => boolean;
-  ingestEvent?: (
+  persistReceipt?: (
     client: ReturnType<typeof createSupabaseServiceClient>,
-    event: InboundDmEvent
+    input: {
+      requestId: string;
+      signatureHeader: string | null;
+      payload: Record<string, unknown>;
+    }
   ) => Promise<{
-    conversationId: string;
-    messageId: string;
+    receiptId: string;
+  }>;
+  enqueueReceiptJob?: (
+    client: ReturnType<typeof createSupabaseServiceClient>,
+    receiptId: string
+  ) => Promise<{
     jobId: string;
-    messageCreated: boolean;
     jobCreated: boolean;
   }>;
 };
@@ -55,43 +61,11 @@ type CrcResponse = {
   response_token: string;
 };
 
-function isInvalidPayloadError(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith("Invalid X DM payload:");
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   return value as Record<string, unknown>;
-}
-
-function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function isSelfAuthoredDmEvent(root: Record<string, unknown>, rawEvent: unknown): boolean {
-  const forUserId = asNonEmptyString(root.for_user_id);
-  if (!forUserId) {
-    return false;
-  }
-
-  const event = asRecord(rawEvent);
-  if (!event) {
-    return false;
-  }
-
-  const messageCreate = asRecord(event.message_create);
-  const senderId = asNonEmptyString(messageCreate?.sender_id);
-  if (!senderId) {
-    return false;
-  }
-
-  return senderId === forUserId;
 }
 
 export async function handleXWebhookPost(
@@ -100,8 +74,6 @@ export async function handleXWebhookPost(
 ): Promise<WebhookResponse> {
   const logger = dependencies.logger ?? console;
   const requestId = dependencies.requestIdFactory?.() ?? randomUUID();
-  const normalizeEvent = dependencies.normalizeEvent ?? normalizeXInboundDmEvent;
-  const ingestEvent = dependencies.ingestEvent ?? ingestInboundDmEvent;
   const verifySignature = dependencies.verifySignature ?? verifyXWebhookSignature;
 
   try {
@@ -132,21 +104,11 @@ export async function handleXWebhookPost(
     }
 
     const rootPayload = asRecord(rawPayload);
-    const directMessageEvents = Array.isArray(rootPayload?.direct_message_events)
-      ? rootPayload.direct_message_events
-      : [];
-
-    if (directMessageEvents.length === 0) {
-      logger.info(
-        JSON.stringify({
-          event: "inbound_ignored_no_direct_message_events",
-          request_id: requestId
-        })
-      );
+    if (!rootPayload) {
       return {
-        status: 200,
+        status: 400,
         body: {
-          ok: true,
+          ok: false,
           requestId
         }
       };
@@ -155,69 +117,56 @@ export async function handleXWebhookPost(
     const supabaseClient =
       dependencies.supabaseClient ??
       createSupabaseServiceClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY);
-
-    let accepted = 0;
-    let skippedSelf = 0;
-    let skippedInvalid = 0;
-
-    for (const rawEvent of directMessageEvents) {
-      if (rootPayload && isSelfAuthoredDmEvent(rootPayload, rawEvent)) {
-        skippedSelf += 1;
-        logger.info(
-          JSON.stringify({
-            event: "inbound_ignored_self_message",
-            request_id: requestId
-          })
-        );
-        continue;
-      }
-
-      const normalizedPayload = rootPayload
-        ? {
-            ...rootPayload,
-            direct_message_events: [rawEvent]
-          }
-        : rawPayload;
-
-      let event: InboundDmEvent;
-      try {
-        event = normalizeEvent(normalizedPayload);
-      } catch (error) {
-        if (!isInvalidPayloadError(error)) {
-          throw error;
+    const persistReceipt =
+      dependencies.persistReceipt ??
+      (async (
+        client: ReturnType<typeof createSupabaseServiceClient>,
+        input: {
+          requestId: string;
+          signatureHeader: string | null;
+          payload: Record<string, unknown>;
         }
-        skippedInvalid += 1;
-        logger.info(
-          JSON.stringify({
-            event: "inbound_ignored_unsupported_event",
-            request_id: requestId,
-            error_message: error instanceof Error ? error.message : "unknown invalid payload error"
-          })
-        );
-        continue;
-      }
+      ) => {
+        const receipt = await insertWebhookReceipt(client, {
+          provider: "x",
+          requestId: input.requestId,
+          signatureHeader: input.signatureHeader,
+          payload: input.payload
+        });
+        return {
+          receiptId: receipt.id
+        };
+      });
+    const enqueueReceiptJob =
+      dependencies.enqueueReceiptJob ??
+      (async (client: ReturnType<typeof createSupabaseServiceClient>, receiptId: string) => {
+        const enqueueResult = await enqueueJob(client, {
+          type: "ingest_webhook_receipt",
+          payload: {
+            receiptId
+          },
+          dedupeKey: dedupeKeyForWebhookReceipt(receiptId)
+        });
+        return {
+          jobId: enqueueResult.job.id,
+          jobCreated: enqueueResult.created
+        };
+      });
 
-      const ingestResult = await ingestEvent(supabaseClient, event);
-      accepted += 1;
-      logger.info(
-        JSON.stringify({
-          event: "inbound_accepted",
-          request_id: requestId,
-          message_id: event.platformMessageId,
-          conversation_id: ingestResult.conversationId,
-          job_id: ingestResult.jobId
-        })
-      );
-    }
+    const persistedReceipt = await persistReceipt(supabaseClient, {
+      requestId,
+      signatureHeader: dependencies.signatureHeader ?? null,
+      payload: rootPayload
+    });
+    const queuedReceiptJob = await enqueueReceiptJob(supabaseClient, persistedReceipt.receiptId);
 
     logger.info(
       JSON.stringify({
-        event: "inbound_batch_processed",
+        event: "inbound_receipt_accepted",
         request_id: requestId,
-        total_events: directMessageEvents.length,
-        accepted,
-        skipped_self: skippedSelf,
-        skipped_invalid: skippedInvalid
+        receipt_id: persistedReceipt.receiptId,
+        job_id: queuedReceiptJob.jobId,
+        job_created: queuedReceiptJob.jobCreated
       })
     );
 
@@ -229,19 +178,17 @@ export async function handleXWebhookPost(
       }
     };
   } catch (error) {
-    const status = isInvalidPayloadError(error) ? 400 : 500;
-
     logger.error(
       JSON.stringify({
         event: "inbound_rejected",
         request_id: requestId,
-        status,
+        status: 500,
         error_message: error instanceof Error ? error.message : "unknown error"
       })
     );
 
     return {
-      status,
+      status: 500,
       body: {
         ok: false,
         requestId

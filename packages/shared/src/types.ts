@@ -4,7 +4,7 @@ export type MessageDirection = "inbound" | "outbound";
 
 export type JobStatus = "queued" | "processing" | "done" | "failed";
 
-export type JobType = "respond_to_inbound_dm";
+export type JobType = "respond_to_inbound_dm" | "ingest_webhook_receipt";
 
 export type InboundDmEvent = {
   platform: Platform;
@@ -15,10 +15,16 @@ export type InboundDmEvent = {
   text: string;
 };
 
-export type QueueJobPayload = {
+export type RespondToInboundDmJobPayload = {
   inboundMessageId: string;
   platformUserId: string;
 };
+
+export type IngestWebhookReceiptJobPayload = {
+  receiptId: string;
+};
+
+export type QueueJobPayload = RespondToInboundDmJobPayload | IngestWebhookReceiptJobPayload;
 
 export type ConversationStatus = "active" | "blocked";
 
@@ -80,6 +86,19 @@ export type DbOutboundSendAttempt = {
   reply_text: string;
   outbound_platform_message_id: string;
   sent_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DbWebhookReceipt = {
+  id: string;
+  provider: Platform;
+  request_id: string;
+  signature_header: string | null;
+  payload: Record<string, unknown>;
+  status: "pending" | "processed" | "failed";
+  last_error: string | null;
+  processed_at: string | null;
   created_at: string;
   updated_at: string;
 };

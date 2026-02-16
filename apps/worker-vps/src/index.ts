@@ -8,6 +8,7 @@ import {
   createSupabaseServiceClient,
   type DbJob,
   type DbMessage,
+  fetchWebhookReceiptById,
   fetchConversationContext,
   fetchOutboundSendAttemptByInboundMessageId,
   fetchMessageByPlatformMessageId,
@@ -16,11 +17,14 @@ import {
   loadRuntimeConfig,
   markJobDone,
   markJobFailed,
+  markWebhookReceiptFailed,
+  markWebhookReceiptProcessed,
+  normalizeXInboundDmEvent,
   recordOutboundSendAttempt,
   shouldRefreshMemorySummary,
   upsertConversationSummary,
   updateConversationLastMessageAt,
-  type QueueJobPayload,
+  type RespondToInboundDmJobPayload,
   type RuntimeConfig
 } from "@ai-influencer/shared";
 
@@ -136,6 +140,38 @@ function isDuplicateOutboundMessageError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("messages_platform_message_id_key");
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function isSelfAuthoredDmEvent(root: Record<string, unknown>, rawEvent: unknown): boolean {
+  const forUserId = asNonEmptyString(root.for_user_id);
+  if (!forUserId) {
+    return false;
+  }
+  const event = asRecord(rawEvent);
+  if (!event) {
+    return false;
+  }
+  const messageCreate = asRecord(event.message_create);
+  const senderId = asNonEmptyString(messageCreate?.sender_id);
+  if (!senderId) {
+    return false;
+  }
+  return senderId === forUserId;
+}
+
 function buildSummaryPromptMessage(summary: string, maxChars: number): OpenRouterChatMessage | null {
   const normalized = summary.trim();
   if (!normalized) {
@@ -187,8 +223,8 @@ export function buildRecentConversationMessages(
     }));
 }
 
-function getQueuePayload(job: DbJob): QueueJobPayload {
-  const payload = job.payload as Partial<QueueJobPayload> | null;
+function getRespondQueuePayload(job: DbJob): RespondToInboundDmJobPayload {
+  const payload = job.payload as Partial<RespondToInboundDmJobPayload> | null;
   if (!payload?.inboundMessageId || !payload.platformUserId) {
     throw new Error("job payload missing inboundMessageId/platformUserId");
   }
@@ -250,7 +286,7 @@ export async function processRespondToInboundDmJob(
   }
 ): Promise<void> {
   try {
-    const payload = getQueuePayload(job);
+    const payload = getRespondQueuePayload(job);
     const inboundMessage = await dependencies.fetchInboundMessage(payload.inboundMessageId);
     if (!inboundMessage) {
       throw new Error("inbound message not found for job payload");
@@ -379,6 +415,118 @@ export async function processRespondToInboundDmJob(
   }
 }
 
+export async function processIngestWebhookReceiptJob(
+  job: DbJob,
+  dependencies: {
+    nowIsoFactory: () => string;
+    logger: Logger;
+    fetchReceipt: (receiptId: string) => Promise<{
+      id: string;
+      payload: Record<string, unknown>;
+      status: "pending" | "processed" | "failed";
+    } | null>;
+    markReceiptProcessed: (receiptId: string, processedAtIso: string) => Promise<void>;
+    markReceiptFailed: (receiptId: string, errorMessage: string) => Promise<void>;
+    ingestEvent: typeof ingestInboundDmEvent;
+    supabaseClient: ReturnType<typeof createSupabaseServiceClient>;
+    markDone: (jobId: string) => Promise<void>;
+    markFailed: (input: {
+      jobId: string;
+      attemptCount: number;
+      nowIso: string;
+      errorMessage: string;
+      errorStack?: string;
+    }) => Promise<void>;
+  }
+): Promise<void> {
+  try {
+    const payload = job.payload as { receiptId?: string } | null;
+    const receiptId = payload?.receiptId?.trim();
+    if (!receiptId) {
+      throw new Error("job payload missing receiptId");
+    }
+
+    const receipt = await dependencies.fetchReceipt(receiptId);
+    if (!receipt) {
+      throw new Error("webhook receipt not found");
+    }
+    if (receipt.status === "processed") {
+      await dependencies.markDone(job.id);
+      return;
+    }
+
+    const rootPayload = asRecord(receipt.payload);
+    const directMessageEvents = Array.isArray(rootPayload?.direct_message_events)
+      ? rootPayload.direct_message_events
+      : [];
+    let ingestedCount = 0;
+
+    for (const rawEvent of directMessageEvents) {
+      if (rootPayload && isSelfAuthoredDmEvent(rootPayload, rawEvent)) {
+        continue;
+      }
+      const normalizedPayload = rootPayload
+        ? {
+            ...rootPayload,
+            direct_message_events: [rawEvent]
+          }
+        : receipt.payload;
+      try {
+        const event = normalizeXInboundDmEvent(normalizedPayload);
+        const result = await dependencies.ingestEvent(dependencies.supabaseClient, event);
+        if (result.messageCreated) {
+          ingestedCount += 1;
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message.startsWith("Invalid X DM payload:")
+        ) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    const nowIso = dependencies.nowIsoFactory();
+    await dependencies.markReceiptProcessed(receiptId, nowIso);
+    await dependencies.markDone(job.id);
+    dependencies.logger.info(
+      JSON.stringify({
+        event: "webhook_receipt_processed",
+        job_id: job.id,
+        receipt_id: receiptId,
+        ingested_count: ingestedCount
+      })
+    );
+  } catch (error) {
+    const nowIso = dependencies.nowIsoFactory();
+    const errorMessage = error instanceof Error ? error.message : "unknown error";
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    const payload = job.payload as { receiptId?: string } | null;
+    const receiptId = payload?.receiptId?.trim();
+
+    if (receiptId) {
+      await dependencies.markReceiptFailed(receiptId, errorMessage);
+    }
+    await dependencies.markFailed({
+      jobId: job.id,
+      attemptCount: job.attempt_count,
+      nowIso,
+      errorMessage,
+      ...(errorStack ? { errorStack } : {})
+    });
+    dependencies.logger.error(
+      JSON.stringify({
+        event: "webhook_receipt_processing_failed",
+        job_id: job.id,
+        ...(receiptId ? { receipt_id: receiptId } : {}),
+        error_message: errorMessage
+      })
+    );
+  }
+}
+
 export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
   const config = dependencies.runtimeConfig ?? loadRuntimeConfig();
   const logger = dependencies.logger ?? console;
@@ -473,6 +621,11 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
       });
     });
   const markDone = dependencies.markDone ?? ((jobId: string) => markJobDone(supabaseClient, jobId));
+  const fetchReceipt = (receiptId: string) => fetchWebhookReceiptById(supabaseClient, receiptId);
+  const markReceiptProcessed = (receiptId: string, processedAtIso: string) =>
+    markWebhookReceiptProcessed(supabaseClient, receiptId, processedAtIso);
+  const markReceiptFailed = (receiptId: string, errorMessage: string) =>
+    markWebhookReceiptFailed(supabaseClient, receiptId, errorMessage);
   const updateLastMessageAt =
     dependencies.updateConversationLastMessageAt ??
     ((conversationId: string, occurredAtIso: string) =>
@@ -520,8 +673,22 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
     });
   const processJob =
     dependencies.processJob ??
-    ((job: DbJob) =>
-      processRespondToInboundDmJob(job, {
+    ((job: DbJob) => {
+      if (job.type === "ingest_webhook_receipt") {
+        return processIngestWebhookReceiptJob(job, {
+          nowIsoFactory,
+          logger,
+          fetchReceipt,
+          markReceiptProcessed,
+          markReceiptFailed,
+          ingestEvent: ingestInboundDmEvent,
+          supabaseClient,
+          markDone,
+          markFailed
+        });
+      }
+
+      return processRespondToInboundDmJob(job, {
         nowIsoFactory,
         maxContextMessages: config.MAX_CONTEXT_MESSAGES,
         maxReplyChars: config.MAX_REPLY_CHARS,
@@ -541,7 +708,8 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
         consumeRateLimit: consumeRateLimitDependency,
         markDone,
         markFailed
-      }));
+      });
+    });
   const requestReplayBackfill =
     dependencies.requestReplayBackfill ??
     (async (window: { fromDateUtcMinute: string; toDateUtcMinute: string }) => {

@@ -5,6 +5,7 @@ import type {
   DbJob,
   DbMessage,
   DbOutboundSendAttempt,
+  DbWebhookReceipt,
   DbUser,
   JobType,
   MessageDirection,
@@ -102,6 +103,10 @@ export function createSupabaseServiceClient(
 
 export function dedupeKeyForInboundMessage(platformMessageId: string): string {
   return `x_dm_inbound:${platformMessageId}`;
+}
+
+export function dedupeKeyForWebhookReceipt(receiptId: string): string {
+  return `x_webhook_receipt:${receiptId}`;
 }
 
 export function computeRetryDelayMs(attemptCount: number, baseDelayMs: number): number {
@@ -297,6 +302,88 @@ export async function enqueueJob(
     job: existing as unknown as DbJob,
     created: false
   };
+}
+
+export async function insertWebhookReceipt(
+  client: SupabaseClient,
+  input: {
+    provider: Platform;
+    requestId: string;
+    signatureHeader: string | null;
+    payload: Record<string, unknown>;
+  }
+): Promise<DbWebhookReceipt> {
+  const { data, error } = await client
+    .from("webhook_receipts")
+    .insert({
+      provider: input.provider,
+      request_id: input.requestId,
+      signature_header: input.signatureHeader,
+      payload: input.payload,
+      status: "pending"
+    })
+    .select()
+    .single();
+
+  if (error || !data) {
+    throw new Error(`insertWebhookReceipt failed: ${error?.message ?? "no data returned"}`);
+  }
+
+  return data as unknown as DbWebhookReceipt;
+}
+
+export async function fetchWebhookReceiptById(
+  client: SupabaseClient,
+  receiptId: string
+): Promise<DbWebhookReceipt | null> {
+  const { data, error } = await client
+    .from("webhook_receipts")
+    .select("*")
+    .eq("id", receiptId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`fetchWebhookReceiptById failed: ${error.message}`);
+  }
+
+  return (data as DbWebhookReceipt | null) ?? null;
+}
+
+export async function markWebhookReceiptProcessed(
+  client: SupabaseClient,
+  receiptId: string,
+  processedAtIso: string
+): Promise<void> {
+  const { error } = await client
+    .from("webhook_receipts")
+    .update({
+      status: "processed",
+      processed_at: processedAtIso,
+      last_error: null
+    })
+    .eq("id", receiptId);
+
+  if (error) {
+    throw new Error(`markWebhookReceiptProcessed failed: ${error.message}`);
+  }
+}
+
+export async function markWebhookReceiptFailed(
+  client: SupabaseClient,
+  receiptId: string,
+  errorMessage: string
+): Promise<void> {
+  const { error } = await client
+    .from("webhook_receipts")
+    .update({
+      status: "failed",
+      last_error: errorMessage
+    })
+    .eq("id", receiptId);
+
+  if (error) {
+    throw new Error(`markWebhookReceiptFailed failed: ${error.message}`);
+  }
 }
 
 export async function claimNextJob(

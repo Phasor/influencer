@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildRecentConversationMessages,
   createWorkerRuntime,
+  processIngestWebhookReceiptJob,
   processRespondToInboundDmJob
 } from "./index";
 
@@ -741,5 +742,72 @@ describe("processRespondToInboundDmJob", () => {
       "user-7",
       "I can't help with that. Let's keep things safe and respectful."
     );
+  });
+});
+
+describe("processIngestWebhookReceiptJob", () => {
+  it("marks receipt processed and job done when receipt contains inbound dm", async () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn()
+    };
+    const markDone = vi.fn(async () => {});
+    const markFailed = vi.fn(async () => {});
+    const markReceiptProcessed = vi.fn(async () => {});
+    const markReceiptFailed = vi.fn(async () => {});
+    const ingestEvent = vi.fn(async () => ({
+      conversationId: "conv-1",
+      messageId: "msg-1",
+      jobId: "job-1",
+      messageCreated: true,
+      jobCreated: true
+    }));
+
+    await processIngestWebhookReceiptJob(
+      {
+        id: "job-receipt-1",
+        type: "ingest_webhook_receipt",
+        attempt_count: 1,
+        payload: {
+          receiptId: "receipt-1"
+        }
+      } as unknown as DbJob,
+      {
+        nowIsoFactory: () => "2026-02-16T00:00:00.000Z",
+        logger,
+        fetchReceipt: vi.fn(async () => ({
+          id: "receipt-1",
+          status: "pending" as const,
+          payload: {
+            for_user_id: "bot-user",
+            direct_message_events: [
+              {
+                type: "message_create",
+                id: "pm-1",
+                created_timestamp: "1760000000000",
+                message_create: {
+                  sender_id: "user-1",
+                  message_data: {
+                    text: "hello"
+                  }
+                }
+              }
+            ]
+          }
+        })),
+        markReceiptProcessed,
+        markReceiptFailed,
+        ingestEvent: ingestEvent as typeof ingestEvent,
+        supabaseClient: {} as never,
+        markDone,
+        markFailed
+      }
+    );
+
+    expect(ingestEvent).toHaveBeenCalledTimes(1);
+    expect(markReceiptProcessed).toHaveBeenCalledWith("receipt-1", "2026-02-16T00:00:00.000Z");
+    expect(markDone).toHaveBeenCalledWith("job-receipt-1");
+    expect(markFailed).not.toHaveBeenCalled();
+    expect(markReceiptFailed).not.toHaveBeenCalled();
   });
 });
