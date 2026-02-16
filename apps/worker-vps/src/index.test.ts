@@ -23,7 +23,11 @@ const runtimeConfig: RuntimeConfig = {
   MAX_REPLY_CHARS: 500,
   ENABLE_X_REPLAY_BACKFILL: false,
   X_REPLAY_INTERVAL_MS: 300000,
-  X_REPLAY_WINDOW_MINUTES: 120
+  X_REPLAY_WINDOW_MINUTES: 120,
+  ENABLE_DM_RECONCILIATION: true,
+  DM_RECONCILIATION_INTERVAL_MS: 600000,
+  DM_RECONCILIATION_LOOKBACK_MINUTES: 180,
+  DM_RECONCILIATION_PAGE_SIZE: 50
 };
 
 describe("buildRecentConversationMessages", () => {
@@ -132,6 +136,32 @@ describe("createWorkerRuntime", () => {
 
     await runtime.runUntilStopped(controller.signal);
     expect(requestReplayBackfill).toHaveBeenCalledTimes(1);
+  });
+
+  it("runUntilStopped triggers dm reconciliation when enabled", async () => {
+    const claimJob = vi.fn(async () => null);
+    const sleep = vi.fn(async () => {});
+    const reconcileInboundEvents = vi.fn(async () => ({ ingestedCount: 0, highestEventId: "200" }));
+    const reconciliationConfig: RuntimeConfig = {
+      ...runtimeConfig,
+      ENABLE_DM_RECONCILIATION: true,
+      DM_RECONCILIATION_INTERVAL_MS: -1
+    };
+    const runtime = createWorkerRuntime({
+      runtimeConfig: reconciliationConfig,
+      workerId: "worker-test",
+      claimJob,
+      sleep,
+      reconcileInboundEvents
+    });
+
+    const controller = new AbortController();
+    sleep.mockImplementationOnce(async () => {
+      controller.abort();
+    });
+
+    await runtime.runUntilStopped(controller.signal);
+    expect(reconcileInboundEvents).toHaveBeenCalledTimes(1);
   });
 
   it("runOnce executes the default job pipeline with mocked integrations", async () => {

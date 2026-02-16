@@ -11,6 +11,7 @@ import {
   fetchConversationContext,
   fetchOutboundSendAttemptByInboundMessageId,
   fetchMessageByPlatformMessageId,
+  ingestInboundDmEvent,
   insertMessage,
   loadRuntimeConfig,
   markJobDone,
@@ -25,6 +26,7 @@ import {
 
 import { generateOpenRouterReply, type OpenRouterChatMessage } from "./openrouter";
 import { sendXDirectMessage } from "./x-dm";
+import { fetchReconciliationInboundEvents } from "./x-dm-reconcile";
 import { computeReplayWindow, requestXReplayBackfill } from "./x-replay";
 
 type Logger = Pick<Console, "info" | "error">;
@@ -79,6 +81,10 @@ type WorkerDependencies = {
     errorStack?: string;
   }) => Promise<void>;
   requestReplayBackfill?: (window: { fromDateUtcMinute: string; toDateUtcMinute: string }) => Promise<void>;
+  reconcileInboundEvents?: (params: {
+    cutoffIso: string;
+    sinceId?: string | null;
+  }) => Promise<{ ingestedCount: number; highestEventId: string | null }>;
 };
 
 type OpenRouterMessage = {
@@ -158,6 +164,11 @@ function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function parseBotUserIdFromAccessToken(accessToken: string): string | null {
+  const prefix = accessToken.split("-")[0]?.trim() ?? "";
+  return prefix.length > 0 ? prefix : null;
 }
 
 export function buildRecentConversationMessages(
@@ -545,6 +556,36 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
         toDateUtcMinute: window.toDateUtcMinute
       });
     });
+  const botUserId = parseBotUserIdFromAccessToken(config.X_ACCESS_TOKEN);
+  const reconcileInboundEvents =
+    dependencies.reconcileInboundEvents ??
+    (async (params: { cutoffIso: string; sinceId?: string | null }) => {
+      if (!botUserId) {
+        throw new Error("Unable to parse bot user id from X_ACCESS_TOKEN.");
+      }
+      const fetched = await fetchReconciliationInboundEvents({
+        consumerKey: config.X_APP_KEY,
+        consumerSecret: config.X_APP_SECRET,
+        accessToken: config.X_ACCESS_TOKEN,
+        accessSecret: config.X_ACCESS_SECRET,
+        botUserId,
+        pageSize: config.DM_RECONCILIATION_PAGE_SIZE,
+        cutoffIso: params.cutoffIso,
+        ...(params.sinceId ? { sinceId: params.sinceId } : {})
+      });
+
+      let ingestedCount = 0;
+      for (const event of fetched.events) {
+        const ingestResult = await ingestInboundDmEvent(supabaseClient, event);
+        if (ingestResult.messageCreated) {
+          ingestedCount += 1;
+        }
+      }
+      return {
+        ingestedCount,
+        highestEventId: fetched.highestEventId
+      };
+    });
 
   async function runOnce(): Promise<boolean> {
     const nowIso = nowIsoFactory();
@@ -573,6 +614,8 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
   async function runUntilStopped(signal: AbortSignal): Promise<void> {
     let nextHealthLogAtMs = Date.now() + HEALTH_LOG_INTERVAL_MS;
     let nextReplayAtMs = Date.now() + config.X_REPLAY_INTERVAL_MS;
+    let nextReconciliationAtMs = Date.now() + config.DM_RECONCILIATION_INTERVAL_MS;
+    let latestReconciliationSinceId: string | null = null;
     while (!signal.aborted) {
       const didWork = await runOnce();
       const nowMs = Date.now();
@@ -608,6 +651,37 @@ export function createWorkerRuntime(dependencies: WorkerDependencies = {}) {
           );
         }
         nextReplayAtMs = nowMs + config.X_REPLAY_INTERVAL_MS;
+      }
+      if (config.ENABLE_DM_RECONCILIATION && nowMs >= nextReconciliationAtMs) {
+        const cutoffIso = new Date(
+          nowMs - config.DM_RECONCILIATION_LOOKBACK_MINUTES * 60_000
+        ).toISOString();
+        try {
+          const reconciliationResult = await reconcileInboundEvents({
+            cutoffIso,
+            ...(latestReconciliationSinceId ? { sinceId: latestReconciliationSinceId } : {})
+          });
+          if (reconciliationResult.highestEventId) {
+            latestReconciliationSinceId = reconciliationResult.highestEventId;
+          }
+          logger.info(
+            JSON.stringify({
+              event: "dm_reconciliation_completed",
+              worker_id: workerId,
+              ingested_count: reconciliationResult.ingestedCount,
+              since_id: latestReconciliationSinceId
+            })
+          );
+        } catch (error) {
+          logger.error(
+            JSON.stringify({
+              event: "dm_reconciliation_failed",
+              worker_id: workerId,
+              error_message: error instanceof Error ? error.message : "unknown reconciliation error"
+            })
+          );
+        }
+        nextReconciliationAtMs = nowMs + config.DM_RECONCILIATION_INTERVAL_MS;
       }
       if (!didWork) {
         await sleep(config.WORKER_POLL_INTERVAL_MS);

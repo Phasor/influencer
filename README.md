@@ -71,6 +71,10 @@ Optional reliability settings:
 - `ENABLE_X_REPLAY_BACKFILL` (default: `false`)
 - `X_REPLAY_INTERVAL_MS` (default: `300000`)
 - `X_REPLAY_WINDOW_MINUTES` (default: `120`)
+- `ENABLE_DM_RECONCILIATION` (default: `true`)
+- `DM_RECONCILIATION_INTERVAL_MS` (default: `600000`)
+- `DM_RECONCILIATION_LOOKBACK_MINUTES` (default: `180`)
+- `DM_RECONCILIATION_PAGE_SIZE` (default: `50`)
 - `DELIVERY_LAG_ALERT_MINUTES` (default: `20`, used by `admin:delivery-health`)
 
 ## Notes

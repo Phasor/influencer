@@ -44,6 +44,10 @@ describe("loadRuntimeConfig", () => {
     expect(result.ENABLE_X_REPLAY_BACKFILL).toBe(false);
     expect(result.X_REPLAY_INTERVAL_MS).toBe(300000);
     expect(result.X_REPLAY_WINDOW_MINUTES).toBe(120);
+    expect(result.ENABLE_DM_RECONCILIATION).toBe(true);
+    expect(result.DM_RECONCILIATION_INTERVAL_MS).toBe(600000);
+    expect(result.DM_RECONCILIATION_LOOKBACK_MINUTES).toBe(180);
+    expect(result.DM_RECONCILIATION_PAGE_SIZE).toBe(50);
   });
 
   it("throws for invalid numeric configuration", () => {

@@ -68,6 +68,10 @@ export type RuntimeConfig = {
   ENABLE_X_REPLAY_BACKFILL: boolean;
   X_REPLAY_INTERVAL_MS: number;
   X_REPLAY_WINDOW_MINUTES: number;
+  ENABLE_DM_RECONCILIATION: boolean;
+  DM_RECONCILIATION_INTERVAL_MS: number;
+  DM_RECONCILIATION_LOOKBACK_MINUTES: number;
+  DM_RECONCILIATION_PAGE_SIZE: number;
 };
 
 export type WebhookRuntimeConfig = {
@@ -166,6 +170,25 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
       "X_REPLAY_WINDOW_MINUTES",
       env.X_REPLAY_WINDOW_MINUTES,
       120
+    ),
+    ENABLE_DM_RECONCILIATION: parseBoolean(
+      "ENABLE_DM_RECONCILIATION",
+      env.ENABLE_DM_RECONCILIATION ?? "true"
+    ),
+    DM_RECONCILIATION_INTERVAL_MS: parseOptionalPositiveInt(
+      "DM_RECONCILIATION_INTERVAL_MS",
+      env.DM_RECONCILIATION_INTERVAL_MS,
+      600_000
+    ),
+    DM_RECONCILIATION_LOOKBACK_MINUTES: parseOptionalPositiveInt(
+      "DM_RECONCILIATION_LOOKBACK_MINUTES",
+      env.DM_RECONCILIATION_LOOKBACK_MINUTES,
+      180
+    ),
+    DM_RECONCILIATION_PAGE_SIZE: parseOptionalPositiveInt(
+      "DM_RECONCILIATION_PAGE_SIZE",
+      env.DM_RECONCILIATION_PAGE_SIZE,
+      50
     )
   };
 }
